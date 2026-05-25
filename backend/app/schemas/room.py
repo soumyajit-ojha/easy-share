@@ -15,4 +15,5 @@ class RoomJoin(BaseModel):
 class RoomResponse(BaseModel):
     pin: str
     room_id: str
+    join_token: str
     status: str = "active"
