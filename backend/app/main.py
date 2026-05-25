@@ -1,9 +1,9 @@
 from time import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import socket
 
-from .routers.v1 import rooms
+from app.routers.v1 import rooms
+from app.utils import get_local_ip
 
 app = FastAPI()
 
@@ -14,23 +14,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# 2. Helper function to get your Local IP Address
-# This is how other devices on your WiFi will find your computer
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        # doesn't even have to be reachable
-        s.connect(("10.255.255.255", 1))
-        IP = s.getsockname()[0]
-    except Exception:
-        IP = "127.0.0.1"
-    finally:
-        s.close()
-    return IP
-
-
 
 app.include_router(rooms.router, prefix="/api/v1/rooms", tags=["Rooms"])
 
