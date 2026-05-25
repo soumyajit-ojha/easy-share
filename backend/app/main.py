@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.v1 import rooms
 from app.utils import get_local_ip
+from app.routers.v1 import rooms, websockets
 
 app = FastAPI()
 
@@ -16,6 +17,7 @@ app.add_middleware(
 )
 
 app.include_router(rooms.router, prefix="/api/v1/rooms", tags=["Rooms"])
+app.include_router(websockets.router, tags=["WebSockets"])
 
 @app.get("/")
 async def read_root():
