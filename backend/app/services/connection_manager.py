@@ -26,14 +26,12 @@ class ConnectionManager:
     async def broadcast_to_room(self, room_id: str, message: dict):
         """Sends a JSON message to everyone in a specific room."""
         if room_id in self.active_connections:
-            for connection in self.active_connections[room_id]:
+            for connection in list(self.active_connections[room_id]):
                 try:
                     await connection.send_json(message)
                 except Exception as e:
                     print("Web Socket boardcast exception")
                     print(str(e))
-                    # If sending fails, the connection might be dead
-                    pass
 
 
 # Singleton instance to be used across the app

@@ -49,6 +49,24 @@ class RoomService:
         """Finds a room via the secure token (QR scan)"""
         return self._rooms_by_token.get(token)
 
+    async def add_peer_to_room(self, room_id: str, client_id: str):
+        """Adds a client_id to the room's peer list"""
+        for pin, data in self._rooms_by_pin.items():
+            if data["room_id"] == room_id:
+                if client_id not in data["peers"]:
+                    data["peers"].append(client_id)
+                return data["peers"]
+        return []
+
+    async def remove_peer_from_room(self, room_id: str, client_id: str):
+        """Removes a client_id from the room's peer list"""
+        for pin, data in self._rooms_by_pin.items():
+            if data["room_id"] == room_id:
+                if client_id in data["peers"]:
+                    data["peers"].remove(client_id)
+                return data["peers"]
+        return []
+
 
 # Create a singleton instance
 room_service = RoomService()
