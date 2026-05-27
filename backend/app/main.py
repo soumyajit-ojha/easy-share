@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 from routers.rooms import router
 
+from routers.websocket import websocket_router
 # from routers.rooms import rooms_router
 
 
@@ -24,6 +25,7 @@ app.add_middleware(
 
 # Include API endpoints under the configured path prefix (e.g., /api/v1)
 app.include_router(router, prefix=settings.API_V1_STR, tags=["Rooms"])
+app.include_router(websocket_router, prefix=settings.API_V1_STR, tags=["Webdscket"])
 
 
 @app.get("/")
