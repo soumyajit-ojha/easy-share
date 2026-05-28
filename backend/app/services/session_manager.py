@@ -1,3 +1,4 @@
+import os
 import random
 import time
 import asyncio
@@ -68,17 +69,26 @@ class SessionManager:
 
     async def remove_device_from_room(self, room_id: str, device_id: str) -> bool:
         """
-        Removes device on disconnect.
+        Removes a disconnected device from a room and cleans up resources if empty.
         """
         async with self._lock:
             if room_id in self._rooms:
                 room = self._rooms[room_id]
                 if device_id in room.active_devices:
                     room.active_devices.remove(device_id)
-                # Auto-cleanup room if empty
+
+                # If there are no devices left in the room, clean up files and delete the room
                 if not room.active_devices:
+                    for file_id, file_data in list(room.files_manifest.items()):
+                        filepath = file_data.get("local_path")
+                        try:
+                            if filepath and os.path.exists(filepath):
+                                os.remove(filepath)
+                        except Exception as e:
+                            print(f"Error deleting file during cleanup: {e}")
+
                     del self._rooms[room_id]
-                return True
+                    return True
             return False
 
 

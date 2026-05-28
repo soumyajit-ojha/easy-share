@@ -1,3 +1,6 @@
+import sys
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,6 +10,8 @@ from routers.rooms import router
 from routers.websocket import websocket_router
 # from routers.rooms import rooms_router
 
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -25,7 +30,7 @@ app.add_middleware(
 
 # Include API endpoints under the configured path prefix (e.g., /api/v1)
 app.include_router(router, prefix=settings.API_V1_STR, tags=["Rooms"])
-app.include_router(websocket_router, prefix=settings.API_V1_STR, tags=["Webdscket"])
+app.include_router(websocket_router)
 
 
 @app.get("/")
