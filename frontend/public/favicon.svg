@@ -1,0 +1,28 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#06B6D4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background Circle -->
+  <circle cx="256" cy="256" r="220" fill="url(#grad1)"/>
+
+  <!-- Share Nodes -->
+  <circle cx="170" cy="180" r="28" fill="white"/>
+  <circle cx="340" cy="140" r="28" fill="white"/>
+  <circle cx="330" cy="340" r="28" fill="white"/>
+
+  <!-- Connection Lines -->
+  <path d="M190 176 L312 145" stroke="white" stroke-width="16" stroke-linecap="round"/>
+  <path d="M188 196 L310 323" stroke="white" stroke-width="16" stroke-linecap="round"/>
+
+  <!-- Stylized S Letter -->
+  <path d="M255 170C225 170 205 188 205 210C205 235 228 245 255 252C282 259 305 268 305 292C305 314 285 332 255 332C231 332 210 323 194 308"
+        stroke="white"
+        stroke-width="22"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        fill="none"/>
+</svg>
