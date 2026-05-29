@@ -3,11 +3,11 @@ import axios from "axios";
 import { useAppStore } from "../store/useAppStore";
 
 export default function RoomView() {
-  const { roomId, activeDevices, deviceId, disconnectWebSocket } =
+  const { roomId, activeDevices, deviceId, disconnectWebSocket, files  } =
     useAppStore();
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [files, setFiles] = useState({});
+  const [setFiles] = useState({});
 
   const backendHost =
     window.location.hostname === "localhost"

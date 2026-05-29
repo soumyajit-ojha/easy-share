@@ -5,7 +5,7 @@ import JoinSession from "./components/JoinSession";
 import RoomView from "./components/RoomView";
 
 function App() {
-  const { roomState, setRoomId, initializeWebSocket } = useAppStore();
+  const { roomState, roomId, initializeWebSocket, setRoomId } = useAppStore();
 
   // If scanning a QR code, handle route parameters: /join/:room_id
   useEffect(() => {
@@ -15,7 +15,11 @@ function App() {
       if (pin && pin.length === 7) {
         setRoomId(pin);
         initializeWebSocket(pin);
+        return;
       }
+    }
+    if (roomId) {
+      initializeWebSocket(roomId);
     }
   }, []);
 

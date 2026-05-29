@@ -22,6 +22,16 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, device_id: str)
     await connection_manager.connect(websocket, room_id)
     await session_manager.add_device_to_room(room_id, device_id)
 
+    await websocket.send_text(
+        json.dumps(
+            {
+                "event": "room_state",
+                "active_devices": room.active_devices,
+                "files_manifest": room.files_manifest,
+            }
+        )
+    )
+
     # Broadcast to the room that a new user has joined
     await connection_manager.broadcast_to_room(
         room_id,
@@ -53,12 +63,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, device_id: str)
         connection_manager.disconnect(websocket, room_id)
         await session_manager.remove_device_from_room(room_id, device_id)
 
-        # Notify remaining devices in the room
-        await connection_manager.broadcast_to_room(
-            room_id,
-            {
-                "event": "device_left",
-                "device_id": device_id,
-                "active_devices": room.active_devices if room else [],
-            },
-        )
+        room_check = await session_manager.get_room(room_id)
+        if room_check:
+            await connection_manager.broadcast_to_room(
+                room_id,
+                {
+                    "event": "device_left",
+                    "device_id": device_id,
+                    "active_devices": room_check.active_devices,
+                },
+            )

@@ -7,10 +7,10 @@ from typing import Dict, List, Optional
 
 
 class SessionRoom(BaseModel):
-    room_id: str  # Unique 7-digit PIN
-    created_at: float  # Timestamp
-    active_devices: List[str] = []  # List of connected WebSocket client identifiers
-    files_manifest: Dict[str, dict] = {}  # Files registered for sharing in this room
+    room_id: str
+    created_at: float
+    active_devices: List[str] = []
+    files_manifest: Dict[str, dict] = {}
 
 
 class SessionManager:
@@ -21,6 +21,7 @@ class SessionManager:
 
     def __init__(self):
         self._rooms: Dict[str, SessionRoom] = {}
+        self._cleanup_tasks: Dict[str, asyncio.Task] = {}
         self._lock = asyncio.Lock()
 
     async def create_room(self) -> SessionRoom:
@@ -45,16 +46,6 @@ class SessionManager:
         async with self._lock:
             return self._rooms.get(room_id)
 
-    async def delete_room(self, room_id: str) -> bool:
-        """
-        Deletes a room from memory.
-        """
-        async with self._lock:
-            if room_id in self._rooms:
-                del self._rooms[room_id]
-                return True
-            return False
-
     async def add_device_to_room(self, room_id: str, device_id: str) -> bool:
         """
         Registers a unique device identity into a session.
@@ -62,6 +53,10 @@ class SessionManager:
         async with self._lock:
             if room_id in self._rooms:
                 room = self._rooms[room_id]
+                if room_id in self._cleanup_tasks:
+                    self._cleanup_tasks[room_id].cancel()
+                    del self._cleanup_tasks[room_id]
+
                 if device_id not in room.active_devices:
                     room.active_devices.append(device_id)
                 return True
@@ -79,17 +74,42 @@ class SessionManager:
 
                 # If there are no devices left in the room, clean up files and delete the room
                 if not room.active_devices:
+                    if room_id not in self._cleanup_tasks:
+                        task = asyncio.create_task(
+                            self._delayed_cleanup(room_id, delay_seconds=30)
+                        )
+                        self._cleanup_tasks[room_id] = task
+                return True
+            return False
+
+    async def _delayed_cleanup(self, room_id: str, delay_seconds: int):
+        """
+        Deletes the room and its associated files after the grace period ends.
+        """
+        try:
+            await asyncio.sleep(delay_seconds)
+            async with self._lock:
+                if room_id in self._rooms:
+                    room = self._rooms[room_id]
+
+                    # Delete the files in the room from the server's disk
                     for file_id, file_data in list(room.files_manifest.items()):
                         filepath = file_data.get("local_path")
                         try:
                             if filepath and os.path.exists(filepath):
                                 os.remove(filepath)
                         except Exception as e:
-                            print(f"Error deleting file during cleanup: {e}")
+                            print(f"Error removing file during cleanup: {e}")
 
+                    # Remove the room from memory
                     del self._rooms[room_id]
-                    return True
-            return False
+
+                if room_id in self._cleanup_tasks:
+                    del self._cleanup_tasks[room_id]
+
+        except asyncio.CancelledError:
+            # Reconnection occurred; cancel the cleanup
+            pass
 
 
 # Global instance provider
