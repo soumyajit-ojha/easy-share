@@ -85,102 +85,102 @@ async def generate_room_qrcode(room_id: str):
         )
 
 
-# Update your endpoints.py file to include this endpoint
-@router.post("/rooms/{room_id}/upload")
-async def upload_file_stream(
-    room_id: str, file: UploadFile = File(...), device_id: str = Form(...)
-):
-    """
-    Handles chunked file uploads and saves them directly to disk.
-    Ensures safe memory usage, even with files larger than 500MB.
-    """
-    try:
-        room = await session_manager.get_room(room_id)
-        if not room:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Session room not found."
-            )
+# # Update your endpoints.py file to include this endpoint
+# @router.post("/rooms/{room_id}/upload")
+# async def upload_file_stream(
+#     room_id: str, file: UploadFile = File(...), device_id: str = Form(...)
+# ):
+#     """
+#     Handles chunked file uploads and saves them directly to disk.
+#     Ensures safe memory usage, even with files larger than 500MB.
+#     """
+#     try:
+#         room = await session_manager.get_room(room_id)
+#         if not room:
+#             raise HTTPException(
+#                 status_code=status.HTTP_404_NOT_FOUND, detail="Session room not found."
+#             )
 
-        # Clean file name and define safe local target path
-        safe_filename = os.path.basename(file.filename)
-        # Prefixing with room_id avoids collisions between different rooms
-        unique_filename = f"{room_id}_{safe_filename}"
-        target_filepath = os.path.join(settings.UPLOAD_DIR, unique_filename)
-    except Exception as e:
-        print("Exception while upload")
-        print(str(e))
-    try:
-        # Open local target file for writing binary chunks asynchronously
-        async with aiofiles.open(target_filepath, "wb") as out_file:
-            # Stream the upload in 1MB chunks (1024 * 1024 bytes)
-            while chunk := await file.read(1024 * 1024):
-                await out_file.write(chunk)
+#         # Clean file name and define safe local target path
+#         safe_filename = os.path.basename(file.filename)
+#         # Prefixing with room_id avoids collisions between different rooms
+#         unique_filename = f"{room_id}_{safe_filename}"
+#         target_filepath = os.path.join(settings.UPLOAD_DIR, unique_filename)
+#     except Exception as e:
+#         print("Exception while upload")
+#         print(str(e))
+#     try:
+#         # Open local target file for writing binary chunks asynchronously
+#         async with aiofiles.open(target_filepath, "wb") as out_file:
+#             # Stream the upload in 1MB chunks (1024 * 1024 bytes)
+#             while chunk := await file.read(1024 * 1024):
+#                 await out_file.write(chunk)
 
-        # Register file inside room manifest
-        file_id = f"file_{random.randint(1000, 9999)}"
-        room.files_manifest[file_id] = {
-            "file_id": file_id,
-            "filename": safe_filename,
-            "local_path": target_filepath,
-            "size": os.path.getsize(target_filepath),
-            "owner": device_id,
-        }
+#         # Register file inside room manifest
+#         file_id = f"file_{random.randint(1000, 9999)}"
+#         room.files_manifest[file_id] = {
+#             "file_id": file_id,
+#             "filename": safe_filename,
+#             "local_path": target_filepath,
+#             "size": os.path.getsize(target_filepath),
+#             "owner": device_id,
+#         }
 
-        # Broadcast update to the room so other devices can download it
+#         # Broadcast update to the room so other devices can download it
         
 
-        await connection_manager.broadcast_to_room(
-            room_id,
-            {"event": "manifest_updated", "files_manifest": room.files_manifest},
-        )
+#         await connection_manager.broadcast_to_room(
+#             room_id,
+#             {"event": "manifest_updated", "files_manifest": room.files_manifest},
+#         )
 
-        return {"status": "success", "file_id": file_id}
+#         return {"status": "success", "file_id": file_id}
 
-    except Exception as e:
-        # Clean up partial files if upload fails
-        if os.path.exists(target_filepath):
-            os.remove(target_filepath)
-        print("Exception while upload")
-        print(str(e))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to stream and write file: {str(e)}",
-        )
+#     except Exception as e:
+#         # Clean up partial files if upload fails
+#         if os.path.exists(target_filepath):
+#             os.remove(target_filepath)
+#         print("Exception while upload")
+#         print(str(e))
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail=f"Failed to stream and write file: {str(e)}",
+#         )
 
 
-@router.get("/rooms/{room_id}/download/{file_id}")
-async def download_file_stream(room_id: str, file_id: str):
-    """
-    Streams requested files to receivers in 1MB chunks to minimize memory usage.
-    """
-    room = await session_manager.get_room(room_id)
-    if not room or file_id not in room.files_manifest:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File requested does not exist or has expired.",
-        )
+# @router.get("/rooms/{room_id}/download/{file_id}")
+# async def download_file_stream(room_id: str, file_id: str):
+#     """
+#     Streams requested files to receivers in 1MB chunks to minimize memory usage.
+#     """
+#     room = await session_manager.get_room(room_id)
+#     if not room or file_id not in room.files_manifest:
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND,
+#             detail="File requested does not exist or has expired.",
+#         )
 
-    file_meta = room.files_manifest[file_id]
-    filepath = file_meta["local_path"]
+#     file_meta = room.files_manifest[file_id]
+#     filepath = file_meta["local_path"]
 
-    if not os.path.exists(filepath):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File payload missing from temporary server disk.",
-        )
+#     if not os.path.exists(filepath):
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND,
+#             detail="File payload missing from temporary server disk.",
+#         )
 
-    # File reader generator that streams chunks asynchronously
-    async def file_chunk_generator():
-        async with aiofiles.open(filepath, mode="rb") as f:
-            while chunk := await f.read(1024 * 1024):  # Stream in 1MB chunks
-                yield chunk
+#     # File reader generator that streams chunks asynchronously
+#     async def file_chunk_generator():
+#         async with aiofiles.open(filepath, mode="rb") as f:
+#             while chunk := await f.read(1024 * 1024):  # Stream in 1MB chunks
+#                 yield chunk
 
-    # Return StreamingResponse with headers that trigger a file download in the browser
-    return StreamingResponse(
-        file_chunk_generator(),
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f"attachment; filename={file_meta['filename']}",
-            "Content-Length": str(file_meta["size"]),
-        },
-    )
+#     # Return StreamingResponse with headers that trigger a file download in the browser
+#     return StreamingResponse(
+#         file_chunk_generator(),
+#         media_type="application/octet-stream",
+#         headers={
+#             "Content-Disposition": f"attachment; filename={file_meta['filename']}",
+#             "Content-Length": str(file_meta["size"]),
+#         },
+#     )
