@@ -10,6 +10,7 @@ export default function RoomView() {
     sendSignalingMessage,
     registerWebRTCCallbacks,
   } = useAppStore();
+
   const [progress, setProgress] = useState(0);
   const [transferStatus, setTransferStatus] = useState("idle"); // 'idle' | 'proposal_pending' | 'sending' | 'receiving'
   const [currentFileName, setCurrentFileName] = useState("");
@@ -20,22 +21,28 @@ export default function RoomView() {
     useState(false);
   const [incomingRequestDetails, setIncomingRequestDetails] = useState(null); // { sender, name, size }
 
-  // References
+  // Connection and Channel References
   const peerConnectionRef = useRef(null);
   const dataChannelRef = useRef(null);
-  const fileToTransmitRef = useRef(null); // Keeps the file reference safe during the proposal wait phase
+  const fileToTransmitRef = useRef(null);
   const targetPeerRef = useRef(null);
 
+  // Synchronization References (Prevents WebRTC state race conditions)
+  const isRemoteDescriptionSetRef = useRef(false);
+  const iceCandidatesQueueRef = useRef([]);
+
+  // Receiving buffer references
   const receivedChunksRef = useRef([]);
   const receivedSizeRef = useRef(0);
   const incomingFileMetaRef = useRef(null);
 
+  // Configuration for ICE candidate exchange
   const iceConfiguration = {
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
   };
 
   useEffect(() => {
-    // Register the WebRTC and consent callbacks
+    // Register the WebRTC signaling and consent callbacks
     registerWebRTCCallbacks(
       handleIncomingOffer,
       handleIncomingAnswer,
@@ -60,6 +67,11 @@ export default function RoomView() {
     }
     fileToTransmitRef.current = null;
     targetPeerRef.current = null;
+    isRemoteDescriptionSetRef.current = false;
+    iceCandidatesQueueRef.current = [];
+    receivedChunksRef.current = [];
+    receivedSizeRef.current = 0;
+    incomingFileMetaRef.current = null;
     setTransferStatus("idle");
     setProgress(0);
   };
@@ -75,7 +87,6 @@ export default function RoomView() {
       return;
     }
 
-    // Save references to the file and target receiver
     fileToTransmitRef.current = file;
     targetPeerRef.current = targetPeer;
 
@@ -83,14 +94,13 @@ export default function RoomView() {
     setCurrentFileName(file.name);
     setCurrentFileSize(file.size);
 
-    // Send the transfer request proposal over the WebSocket
+    // Propose the file transfer to the receiver
     sendSignalingMessage("transfer_request", targetPeer, {
       name: file.name,
       size: file.size,
     });
   };
 
-  // Receiver receives the transfer request
   function handleIncomingTransferRequest(senderId, payload) {
     setIncomingRequestDetails({
       sender: senderId,
@@ -100,7 +110,6 @@ export default function RoomView() {
     setShowIncomingRequestModal(true);
   }
 
-  // Handle the receiver's response
   const handleAcceptRequest = () => {
     if (!incomingRequestDetails) return;
     setShowIncomingRequestModal(false);
@@ -108,7 +117,6 @@ export default function RoomView() {
     setProgress(0);
     setCurrentFileName(incomingRequestDetails.name);
 
-    // Send the approval response back to the sender
     sendSignalingMessage("transfer_response", incomingRequestDetails.sender, {
       approved: true,
     });
@@ -118,17 +126,14 @@ export default function RoomView() {
     if (!incomingRequestDetails) return;
     setShowIncomingRequestModal(false);
 
-    // Send the rejection response back to the sender
     sendSignalingMessage("transfer_response", incomingRequestDetails.sender, {
       approved: false,
     });
     cleanupPeerConnection();
   };
 
-  // Sender processes the receiver's response
   function handleIncomingTransferResponse(senderId, payload) {
     if (payload.approved) {
-      // Receiver approved the transfer; start the WebRTC connection
       initiateSenderPeerConnection();
     } else {
       alert("The receiver declined your file transfer request.");
@@ -147,6 +152,8 @@ export default function RoomView() {
 
     const pc = new RTCPeerConnection(iceConfiguration);
     peerConnectionRef.current = pc;
+    isRemoteDescriptionSetRef.current = false;
+    iceCandidatesQueueRef.current = [];
 
     const dc = pc.createDataChannel("file-transfer", { ordered: true });
     dataChannelRef.current = dc;
@@ -178,53 +185,68 @@ export default function RoomView() {
   };
 
   const transmitFileChunks = async (file, dataChannel) => {
-    const chunkSize = 16384; // 16KB optimal payload chunk size
+    // High-performance network pipelining constants
+    const chunkSize = 262144; // 256KB Chunks (minimizes packet processing overhead)
+    const maxBufferLimit = 4194304; // 4MB Outbound Queue Ceiling (Saturates modern routers)
+    const lowBufferThreshold = 2097152; // 2MB Low Watermark Queue Trigger
+
+    dataChannel.bufferedAmountLowThreshold = lowBufferThreshold;
     let offset = 0;
 
-    const readSlice = (sliceOffset) => {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
-        reader.onerror = (err) => reject(err);
-        const slice = file.slice(sliceOffset, sliceOffset + chunkSize);
-        reader.readAsArrayBuffer(slice);
-      });
-    };
-
+    // Fast asynchronous chunk transmission loop
     while (offset < file.size) {
-      // Backpressure Check: wait for the buffer to clear if it gets too full
-      if (dataChannel.bufferedAmount > 65535) {
+      // Backpressure Check: If our unsent queue is full (above 4MB),
+      // pause the transmission loop and wait for the buffer to drain below 2MB.
+      if (dataChannel.bufferedAmount > maxBufferLimit) {
         await new Promise((resolve) => {
           dataChannel.onbufferedamountlow = () => {
-            dataChannel.onbufferedamountlow = null;
+            dataChannel.onbufferedamountlow = null; // Unbind immediately
             resolve();
           };
         });
       }
 
       try {
-        const chunkData = await readSlice(offset);
+        const slice = file.slice(offset, offset + chunkSize);
+
+        // Native Blob.arrayBuffer() processes file reads in native C++,
+        // bypassing slow JavaScript FileReader threads.
+        const chunkData = await slice.arrayBuffer();
+
         dataChannel.send(chunkData);
         offset += chunkData.byteLength;
-        setProgress(Math.round((offset / file.size) * 100));
+
+        // Optimization: Update progress state only once per 1MB to prevent
+        // heavy React UI renders from throttling transmission speeds.
+        if (offset % 1048576 === 0 || offset >= file.size) {
+          setProgress(Math.round((offset / file.size) * 100));
+        }
       } catch (err) {
-        console.error("Chunk read error:", err);
+        console.error("P2P chunk transmission exception:", err);
         cleanupPeerConnection();
         return;
       }
     }
 
+    // Notify receiver that the transfer is complete
     dataChannel.send(JSON.stringify({ type: "done" }));
+    setProgress(100);
     setTimeout(() => {
       alert("File transfer completed successfully!");
       cleanupPeerConnection();
     }, 1000);
   };
 
-  // --- WEBRTC HANDSHAKE (RECEIVER SIDE) ---
+  // --- WEBRTC SIGNALLING HANDSHAKE & QUEUE SYSTEM ---
   async function handleIncomingOffer(senderId, offer) {
+    cleanupPeerConnection();
+    setTransferStatus("receiving");
+    setProgress(0);
+
     const pc = new RTCPeerConnection(iceConfiguration);
     peerConnectionRef.current = pc;
+    isRemoteDescriptionSetRef.current = false;
+    iceCandidatesQueueRef.current = [];
 
     pc.ondatachannel = (event) => {
       const dc = event.channel;
@@ -238,26 +260,57 @@ export default function RoomView() {
       }
     };
 
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      isRemoteDescriptionSetRef.current = true;
 
-    sendSignalingMessage("webrtc_answer", senderId, answer);
+      // Drain any queued candidates that arrived before setRemoteDescription finished
+      for (const candidate of iceCandidatesQueueRef.current) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+      iceCandidatesQueueRef.current = [];
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendSignalingMessage("webrtc_answer", senderId, answer);
+    } catch (err) {
+      console.error("WebRTC offer setup exception:", err);
+      cleanupPeerConnection();
+    }
   }
 
   async function handleIncomingAnswer(senderId, answer) {
-    if (peerConnectionRef.current) {
-      await peerConnectionRef.current.setRemoteDescription(
-        new RTCSessionDescription(answer),
-      );
+    const pc = peerConnectionRef.current;
+    if (pc) {
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        isRemoteDescriptionSetRef.current = true;
+
+        // Drain any queued candidates
+        for (const candidate of iceCandidatesQueueRef.current) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+        iceCandidatesQueueRef.current = [];
+      } catch (err) {
+        console.error("WebRTC set remote description exception:", err);
+        cleanupPeerConnection();
+      }
     }
   }
 
   async function handleIncomingIceCandidate(senderId, candidate) {
-    if (peerConnectionRef.current) {
-      await peerConnectionRef.current.addIceCandidate(
-        new RTCIceCandidate(candidate),
-      );
+    const pc = peerConnectionRef.current;
+    if (pc) {
+      // If our remote description isn't set yet, queue the candidate to prevent connection loss
+      if (!isRemoteDescriptionSetRef.current) {
+        iceCandidatesQueueRef.current.push(candidate);
+      } else {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.error("WebRTC add ice candidate exception:", err);
+        }
+      }
     }
   }
 
@@ -276,12 +329,21 @@ export default function RoomView() {
           triggerFileReconstructionAndDownload();
         }
       } else {
+        // Collect incoming binary chunks in memory
         receivedChunksRef.current.push(event.data);
         receivedSizeRef.current += event.data.byteLength;
 
         if (incomingFileMetaRef.current) {
           const totalSize = incomingFileMetaRef.current.size;
-          setProgress(Math.round((receivedSizeRef.current / totalSize) * 100));
+          // Progress update throttling for the receiver
+          if (
+            receivedSizeRef.current % 1048576 === 0 ||
+            receivedSizeRef.current >= totalSize
+          ) {
+            setProgress(
+              Math.round((receivedSizeRef.current / totalSize) * 100),
+            );
+          }
         }
       }
     };
@@ -291,6 +353,7 @@ export default function RoomView() {
     const meta = incomingFileMetaRef.current;
     if (!meta) return;
 
+    // Convert accumulated array buffers back into a downloadable file
     const fileBlob = new Blob(receivedChunksRef.current);
     const downloadUrl = URL.createObjectURL(fileBlob);
 
@@ -301,6 +364,7 @@ export default function RoomView() {
     link.click();
     document.body.removeChild(link);
 
+    // Free up browser memory immediately
     URL.revokeObjectURL(downloadUrl);
     cleanupPeerConnection();
     alert(`Successfully received ${meta.name}!`);
