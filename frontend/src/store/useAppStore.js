@@ -19,8 +19,12 @@ export const useAppStore = create((set, get) => ({
   isConnected: false,
   roomState: getPersistedRoomId() ? "joined" : "idle",
 
-  files: {},
-  // transferRequests: [], // Holds file transfer proposals
+  // Custom callbacks to relay WebRTC and consent events to UI components
+  onWebRTCOffer: null,
+  onWebRTCAnswer: null,
+  onWebRTCIceCandidate: null,
+  onTransferRequest: null,
+  onTransferResponse: null,
 
   setRoomId: (roomId) => {
     if (roomId) {
@@ -28,10 +32,39 @@ export const useAppStore = create((set, get) => ({
       set({ roomId, roomState: "joined" });
     } else {
       sessionStorage.removeItem("WIFI_SHARE_ROOM_ID");
-      set({ roomId: null, roomState: "idle", files: {}, activeDevices: [] });
+      set({ roomId: null, roomState: "idle", activeDevices: [] });
     }
   },
-  // setRoomState: (roomState) => set({ roomState }),
+
+  registerWebRTCCallbacks: (
+    onOffer,
+    onAnswer,
+    onIce,
+    onRequest,
+    onResponse,
+  ) => {
+    set({
+      onWebRTCOffer: onOffer,
+      onWebRTCAnswer: onAnswer,
+      onWebRTCIceCandidate: onIce,
+      onTransferRequest: onRequest,
+      onTransferResponse: onResponse,
+    });
+  },
+
+  sendSignalingMessage: (event, target, payload) => {
+    const { socket, deviceId } = get();
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(
+        JSON.stringify({
+          event,
+          sender: deviceId,
+          target,
+          payload,
+        }),
+      );
+    }
+  },
 
   initializeWebSocket: (roomId) => {
     const { deviceId, socket: currentSocket } = get();
@@ -39,7 +72,6 @@ export const useAppStore = create((set, get) => ({
       currentSocket.close();
     }
 
-    // Connect using host IP address
     const backendHost =
       window.location.hostname === "localhost"
         ? "localhost:8000"
@@ -56,34 +88,50 @@ export const useAppStore = create((set, get) => ({
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        const {
+          onWebRTCOffer,
+          onWebRTCAnswer,
+          onWebRTCIceCandidate,
+          onTransferRequest,
+          onTransferResponse,
+          deviceId: myId,
+        } = get();
 
         switch (data.event) {
           case "room_state":
-            set({
-              activeDevices: data.active_devices || [],
-              files: data.files_manifest || {},
-            });
-            break;
           case "device_joined":
           case "device_left":
             set({ activeDevices: data.active_devices || [] });
             break;
-          // case "transfer_offer":
-          //   // Add transfer offer to list
-          //   set((state) => ({
-          //     transferRequests: [...state.transferRequests, data.payload],
-          //   }));
-          //   break;
-          case "manifest_updated":
-            set({ files: data.files_manifest || {} });
+
+          // WebRTC and Consent Event Handlers:
+          case "transfer_request":
+            if (data.target === myId && onTransferRequest) {
+              onTransferRequest(data.sender, data.payload);
+            }
+            break;
+          case "transfer_response":
+            if (data.target === myId && onTransferResponse) {
+              onTransferResponse(data.sender, data.payload);
+            }
+            break;
+          case "webrtc_offer":
+            if (data.target === myId && onWebRTCOffer) {
+              onWebRTCOffer(data.sender, data.payload);
+            }
+            break;
+          case "webrtc_answer":
+            if (data.target === myId && onWebRTCAnswer) {
+              onWebRTCAnswer(data.sender, data.payload);
+            }
+            break;
+          case "webrtc_ice_candidate":
+            if (data.target === myId && onWebRTCIceCandidate) {
+              onWebRTCIceCandidate(data.sender, data.payload);
+            }
             break;
           default:
             break;
-          // case "transfer_response":
-          //   // Handle response inside transfer execution flow (handled in Phase 10)
-          //   break;
-          // default:
-          //   break;
         }
       } catch (err) {
         console.error("Error parsing WebSocket message:", err);
@@ -91,7 +139,7 @@ export const useAppStore = create((set, get) => ({
     };
 
     ws.onclose = () => {
-      set({ socket: null, isConnected: false, activeDevices: [] });
+      set({ socket: null, isConnected: false });
     };
 
     ws.onerror = () => {
@@ -105,12 +153,6 @@ export const useAppStore = create((set, get) => ({
       socket.close();
     }
     sessionStorage.removeItem("WIFI_SHARE_ROOM_ID");
-    set({
-      socket: null,
-      isConnected: false,
-      roomId: null,
-      roomState: "idle",
-      files: {},
-    });
+    set({ socket: null, isConnected: false, roomId: null, roomState: "idle" });
   },
 }));
